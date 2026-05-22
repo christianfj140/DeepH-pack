@@ -1,0 +1,13 @@
+.venv/
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+
+# Local DeepH working data and outputs
+work/
+work_dir/
+graph_data/
+result/
+data/

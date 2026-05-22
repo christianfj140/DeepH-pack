@@ -257,7 +257,7 @@ class DeepHKernel:
         pretrained = self.config.get('train', 'pretrained')
         if pretrained:
             if os.path.isfile(pretrained):
-                checkpoint = torch.load(pretrained, map_location=self.device)
+                checkpoint = torch.load(pretrained, map_location=self.device, weights_only=False)
                 pretrained_dict = checkpoint['state_dict']
                 model_dict = self.model.state_dict()
 
@@ -277,7 +277,7 @@ class DeepHKernel:
         resume = self.config.get('train', 'resume')
         if resume:
             if os.path.isfile(resume):
-                checkpoint = torch.load(resume, map_location=self.device)
+                checkpoint = torch.load(resume, map_location=self.device, weights_only=False)
                 self.model.load_state_dict(checkpoint['state_dict'])
                 self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
                 print(f'=> loaded model at "{resume}" (epoch {checkpoint["epoch"]})')
@@ -525,7 +525,7 @@ class DeepHKernel:
                           f'Val loss: {val_losses.avg:.8f} \t| '
                           f'Best val loss: {self.best_val_loss:.8f}.'
                           )
-                    best_checkpoint = torch.load(os.path.join(self.config.get('basic', 'save_dir'), 'best_state_dict.pkl'))
+                    best_checkpoint = torch.load(os.path.join(self.config.get('basic', 'save_dir'), 'best_state_dict.pkl'), weights_only=False)
                     self.model.load_state_dict(best_checkpoint['state_dict'])
                     self.optimizer.load_state_dict(best_checkpoint['optimizer_state_dict'])
                     if self.config.getboolean('train', 'revert_then_decay'):
@@ -601,7 +601,7 @@ class DeepHKernel:
             print('\nKeyboardInterrupt')
 
         print('---------Evaluate Model on Test Set---------------')
-        best_checkpoint = torch.load(os.path.join(self.config.get('basic', 'save_dir'), 'best_state_dict.pkl'))
+        best_checkpoint = torch.load(os.path.join(self.config.get('basic', 'save_dir'), 'best_state_dict.pkl'), weights_only=False)
         self.model.load_state_dict(best_checkpoint['state_dict'])
         print("=> load best checkpoint (epoch {})".format(best_checkpoint['epoch']))
         with torch.no_grad():
@@ -782,15 +782,25 @@ class DeepHKernel:
                     test_targets = torch.squeeze(label.detach().cpu()).tolist()
                     test_preds = torch.squeeze(output.detach().cpu()).tolist()
                     test_ids = np.array(batch.stru_id)[torch.squeeze(batch.batch).numpy()].tolist()
-                    test_atom_ids += torch.squeeze(torch.tensor(range(batch.num_nodes)) - torch.tensor(batch.__slices__['x'])[batch.batch]).tolist()
+                    node_slices = torch.tensor(
+                        batch.__slices__['x'] if hasattr(batch, '__slices__') else batch.ptr,
+                        device=batch.batch.device,
+                    )
+                    test_atom_ids += torch.squeeze(
+                        torch.tensor(range(batch.num_nodes), device=batch.batch.device) - node_slices[batch.batch]
+                    ).cpu().tolist()
                     test_atomic_numbers += torch.squeeze(self.index_to_Z[batch.x]).tolist()
                 else:
                     edge_stru_index = torch.squeeze(batch.batch[batch.edge_index[0]]).numpy()
-                    edge_slices = torch.tensor(batch.__slices__['x'])[edge_stru_index].view(-1, 1)
+                    node_slices = torch.tensor(
+                        batch.__slices__['x'] if hasattr(batch, '__slices__') else batch.ptr,
+                        device=batch.edge_index.device,
+                    )
+                    edge_slices = node_slices[torch.as_tensor(edge_stru_index, device=batch.edge_index.device)].view(-1, 1)
                     test_preds += torch.squeeze(output.detach().cpu()).tolist()
                     test_targets += torch.squeeze(label.detach().cpu()).tolist()
                     test_ids += np.array(batch.stru_id)[edge_stru_index].tolist()
-                    test_atom_ids += torch.squeeze(batch.edge_index.T - edge_slices).tolist()
+                    test_atom_ids += torch.squeeze(batch.edge_index.T - edge_slices).cpu().tolist()
                     test_atomic_numbers += torch.squeeze(self.index_to_Z[batch.x[batch.edge_index.T]]).tolist()
                     test_edge_infos += torch.squeeze(batch.edge_attr[:, :7].detach().cpu()).tolist()
             if output_E is True:

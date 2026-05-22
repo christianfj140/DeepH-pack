@@ -55,7 +55,8 @@ def main():
         warnings.warn('You are using the trained model with an old version')
         checkpoint = torch.load(
             os.path.join(args.trained_model_dir, 'best_model.pkl'),
-            map_location=kernel.device
+            map_location=kernel.device,
+            weights_only=False
         )
         for key in ['index_to_Z', 'Z_to_index', 'spinful']:
             if key in checkpoint:
@@ -88,7 +89,7 @@ def main():
         inv_lattice = torch.inverse(lattice)
 
         if os.path.exists(os.path.join(input_dir, 'graph.pkl')):
-            data = torch.load(os.path.join(input_dir, 'graph.pkl'))
+            data = torch.load(os.path.join(input_dir, 'graph.pkl'), weights_only=False)
             print(f"Load processed graph from {os.path.join(input_dir, 'graph.pkl')}")
         else:
             begin = time.time()

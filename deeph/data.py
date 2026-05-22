@@ -102,7 +102,7 @@ raw_data_dir
             self.process()
         begin = time.time()
         try:
-            loaded_data = torch.load(self.data_file)
+            loaded_data = torch.load(self.data_file, weights_only=False)
         except AttributeError:
             raise RuntimeError('Error in loading graph data file, try to delete it and generate the graph file with the current version of PyG')
         if len(loaded_data) == 2:

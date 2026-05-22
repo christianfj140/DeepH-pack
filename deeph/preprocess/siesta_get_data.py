@@ -6,6 +6,71 @@ import h5py
 import json
 from scipy.io import FortranFile
 
+
+def read_siesta_hsx_sparse(input_path, system_name):
+    """Read SIESTA HSX sparse rows.
+
+    Newer SIESTA HSX files include header/layout records that the original
+    DeepH FortranFile reader does not understand. Prefer sisl's SIESTA reader
+    when available, and keep the original record-by-record path as fallback for
+    older files.
+    """
+    hsx_path = '{}/{}.HSX'.format(input_path, system_name)
+    try:
+        from sisl.io.siesta import _siesta
+
+        nspin, _, no_u, no_s, nnz = _siesta.read_hsx_sizes(hsx_path)
+        ncol, col, dH, dS, _isc = _siesta.read_hsx_hsx1_2(
+            hsx_path,
+            nspin,
+            no_u,
+            no_s,
+            nnz,
+        )
+        maxnumh = int(max(ncol))
+        listh = np.zeros((no_u, maxnumh), dtype=int)
+        hamiltonian_rows = [[None for _ in range(no_u)] for _ in range(nspin)]
+        overlap_rows = [None for _ in range(no_u)]
+        offset = 0
+        for j in range(no_u):
+            count = int(ncol[j])
+            next_offset = offset + count
+            listh[j, :count] = col[offset:next_offset]
+            for spin_index in range(nspin):
+                hamiltonian_rows[spin_index][j] = dH[offset:next_offset, spin_index]
+            overlap_rows[j] = dS[offset:next_offset]
+            offset = next_offset
+        return no_u, no_s, nspin, listh, hamiltonian_rows, overlap_rows
+    except Exception:
+        pass
+
+    f = FortranFile(hsx_path, 'r')
+    tmpt = f.read_ints() # no_u, no_s, nspin, nh
+    no_u = tmpt[0]
+    no_s = tmpt[1]
+    nspin = tmpt[2]
+    _nh = tmpt[3]
+    _ = f.read_ints() # gamma
+    _ = f.read_ints() # indxuo
+    tmpt = f.read_ints() # numh
+    maxnumh = max(tmpt)
+    listh = np.zeros((no_u, maxnumh), dtype=int)
+    for i in range(no_u):
+        tmpt = f.read_ints() # listh
+        for j in range(len(tmpt)):
+            listh[i, j] = tmpt[j]
+    hamiltonian_rows = []
+    for i in range(nspin):
+        spin_rows = []
+        for _ in range(no_u):
+            spin_rows.append(f.read_reals(dtype='<f4'))
+        hamiltonian_rows.append(spin_rows)
+    overlap_rows = []
+    for _ in range(no_u):
+        overlap_rows.append(f.read_reals(dtype='<f4'))
+    f.close()
+    return no_u, no_s, nspin, listh, hamiltonian_rows, overlap_rows
+
 # Transfer SIESTA output to DeepH format
 # DeepH-pack: https://deeph-pack.readthedocs.io/en/latest/index.html
 # Coded by ZC Tang @ Tsinghua Univ. e-mail: az_txycha@126.com
@@ -226,22 +291,10 @@ def siesta_parse(input_path, output_path):
         orb2deephorb[t,4] = int(orb_order[j])
         t += 1
 
-    # Read Useful info of HSX, We only need H and S from this file, but due to structure of fortran unformatted, extra information must be read
-    f = FortranFile('{}/{}.HSX'.format(input_path,system_name), 'r')
-    tmpt = f.read_ints() # no_u, no_s, nspin, nh
-    no_u = tmpt[0]
-    no_s = tmpt[1]
-    nspin = tmpt[2]
-    nh = tmpt[3]
-    tmpt = f.read_ints() # gamma
-    tmpt = f.read_ints() # indxuo
-    tmpt = f.read_ints() # numh
-    maxnumh = max(tmpt)
-    listh = np.zeros((no_u, maxnumh),dtype=int)
-    for i in range(no_u):
-        tmpt=f.read_ints() # listh
-        for j in range(len(tmpt)):
-            listh[i,j] = tmpt[j]
+    # Read Useful info of HSX. Use sisl for modern SIESTA HSX records when
+    # available, with the original FortranFile reader as legacy fallback.
+    no_u, no_s, nspin, listh, hamiltonian_rows, overlap_rows = read_siesta_hsx_sparse(input_path, system_name)
+    maxnumh = listh.shape[1]
 
     # finds set of connected atoms
     connected_atoms = set()
@@ -264,7 +317,7 @@ def siesta_parse(input_path, output_path):
     # converts csr-like matrix into coo form in atomic pairs
     for i in range(nspin):
         for j in range(no_u):
-            tmpt=f.read_reals(dtype='<f4') # Hamiltonian
+            tmpt = hamiltonian_rows[i][j] # Hamiltonian
             for k in range(len(tmpt)):
                 m = 0 # several orbits in siesta differs with DeepH in a (-1) factor
                 i2 = j
@@ -283,7 +336,7 @@ def siesta_parse(input_path, output_path):
         S_block_sparse[atom_pair] = []
 
     for j in range(no_u):
-        tmpt=f.read_reals(dtype='<f4') # Overlap
+        tmpt = overlap_rows[j] # Overlap
         for k in range(len(tmpt)):
             m = 0
             i2 = j
@@ -315,7 +368,6 @@ def siesta_parse(input_path, output_path):
         for i in range(len(sparse_form)):
             tmpt[int(sparse_form[i][0]),int(sparse_form[i][1])]=sparse_form[i][2]/0.036749324533634074/2
         H_block_sparse[Rijkab]=tmpt
-    f.close()
     f = h5py.File('{}/hamiltonians.h5'.format(output_path),'w')
     for Rijkab in H_block_sparse.keys():
         f[Rijkab] = H_block_sparse[Rijkab]
